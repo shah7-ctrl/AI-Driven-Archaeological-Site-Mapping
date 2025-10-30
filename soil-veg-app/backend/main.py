@@ -1,64 +1,61 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-from ultralytics import YOLO
-from PIL import Image
+from fastapi.responses import JSONResponse
 import io
 import cv2
 import numpy as np
 import base64
+from ultralytics import YOLO
+from PIL import Image
 
 app = FastAPI()
 
-# Allow React frontend to access the backend
+# CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # for local development
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Load both YOLO models
-soil_model = YOLO("models/yolo_soil_seg_best.pt")
+# Load your models
 veg_model = YOLO("models/best.pt")
+soil_model = YOLO("models/yolo_soil_seg_best.pt")
 
 @app.post("/predict/")
-async def predict(file: UploadFile = File(...), model_type: str = Form("Soil Detection")):
-    # Read image
-    image_bytes = await file.read()
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+async def predict(file: UploadFile = File(...), model_type: str = Form(...)):
+    try:
+        image_bytes = await file.read()
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")  # ensure RGB
 
-    # Select model safely (case-insensitive)
-    model_type_clean = model_type.lower().strip()
-    if model_type_clean == "soil detection":
-        model = soil_model
-        print("🧱 Using Soil Detection model")
-    else:
-        model = veg_model
-        print("🌿 Using Vegetation Detection model")
+        # Resize to 640x640 before inference
+        img_resized = img.resize((640, 640))
+        img_np = np.array(img_resized)
 
-    # Run YOLO prediction
-    results = model.predict(source=np.array(image), conf=0.1, imgsz=640)
-    annotated = results[0].plot()  # annotated image from YOLO
-    annotated = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+        # Select model
+        model = soil_model if model_type == "Soil Detection" else veg_model
 
-    # Convert annotated image to base64 for frontend
-    _, img_encoded = cv2.imencode('.jpg', annotated)
-    img_base64 = base64.b64encode(img_encoded).decode("utf-8")
+        # Run prediction
+        results = model.predict(img_np, conf=0.25, verbose=False)
 
-    # Extract predictions
-    predictions = []
-    for box in results[0].boxes:
-        cls_id = int(box.cls)
-        conf = float(box.conf)
-        predictions.append({
-            "class": results[0].names[cls_id],
-            "confidence": round(conf, 2)
-        })
+        # Draw boxes on image
+        annotated_img = results[0].plot()  # OpenCV (BGR)
+        annotated_img = cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB)  # convert to RGB before saving
 
-    print(f"✅ Predictions: {predictions}")
+        # Encode image to base64
+        _, buffer = cv2.imencode(".jpg", annotated_img)
+        img_base64 = base64.b64encode(buffer).decode("utf-8")
 
-    return {
-        "predictions": predictions,
-        "image": img_base64
-    }
+        # Extract prediction data
+        preds = []
+        for box in results[0].boxes:
+            preds.append({
+                "class": model.names[int(box.cls)],
+                "confidence": round(float(box.conf), 2)
+            })
+
+        return JSONResponse(content={"predictions": preds, "image": img_base64})
+
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
