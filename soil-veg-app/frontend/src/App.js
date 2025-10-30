@@ -10,10 +10,35 @@ function App() {
   const [model, setModel] = useState("Soil Detection");
   const [loading, setLoading] = useState(false);
 
-  const onDrop = (acceptedFiles) => {
+  // Convert and resize image before upload (to 640x640)
+  const resizeImage = (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+          canvas.width = 640;
+          canvas.height = 640;
+          ctx.drawImage(img, 0, 0, 640, 640);
+          canvas.toBlob((blob) => {
+            resolve(new File([blob], file.name, { type: "image/jpeg" }));
+          }, "image/jpeg");
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const onDrop = async (acceptedFiles) => {
     const selectedFile = acceptedFiles[0];
-    setFile(selectedFile);
-    setPreview(URL.createObjectURL(selectedFile));
+    if (!selectedFile) return;
+
+    const resizedFile = await resizeImage(selectedFile);
+    setFile(resizedFile);
+    setPreview(URL.createObjectURL(resizedFile));
     setResultImage(null);
     setPredictions([]);
   };
@@ -35,6 +60,7 @@ function App() {
       const response = await axios.post("http://127.0.0.1:8000/predict/", formData, {
         responseType: "json",
       });
+
       setPredictions(response.data.predictions);
       setResultImage(`data:image/jpeg;base64,${response.data.image}`);
     } catch (error) {
@@ -66,15 +92,12 @@ function App() {
 
       {preview && (
         <div style={styles.previewBox}>
-          <img src={preview} alt="preview" style={styles.image} />
+          <h3>Uploaded Image:</h3>
+          <img src={preview} alt="preview" style={styles.fixedImage} />
         </div>
       )}
 
-      <button
-        style={styles.button}
-        onClick={handlePredict}
-        disabled={loading}
-      >
+      <button style={styles.button} onClick={handlePredict} disabled={loading}>
         {loading ? "Analyzing..." : "Run Prediction"}
       </button>
 
@@ -86,7 +109,8 @@ function App() {
               <b>{p.class}</b> — Confidence: {p.confidence}
             </p>
           ))}
-          <img src={resultImage} alt="result" style={styles.image} />
+          <h3>Detected Result:</h3>
+          <img src={resultImage} alt="result" style={styles.fixedImage} />
         </div>
       )}
     </div>
@@ -127,10 +151,12 @@ const styles = {
   previewBox: {
     marginBottom: "20px",
   },
-  image: {
-    maxWidth: "100%",
+  fixedImage: {
+    width: "640px",
+    height: "640px",
     borderRadius: "12px",
     boxShadow: "0 0 10px rgba(0,0,0,0.1)",
+    objectFit: "cover",
   },
   button: {
     backgroundColor: "#2d8659",
